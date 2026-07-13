@@ -75,7 +75,8 @@ async function fetchAllMessages(): Promise<any[]> {
   let before: string | null = null
 
   while (true) {
-    const url = `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages?limit=100${before ? `&before=${before}` : ''}`
+    const beforeParam: string = before ? `&before=${before}` : ''
+    const url: string = `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages?limit=100${beforeParam}`
     const res = await fetch(url, { headers: { Authorization: `Bot ${BOT_TOKEN}` } })
     if (!res.ok) break
 
