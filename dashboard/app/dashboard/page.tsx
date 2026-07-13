@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v2.7'
+const V='v2.8'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 const TZ='America/New_York' // EST/EDT — all date comparisons use this
@@ -66,10 +66,28 @@ export default function Dashboard(){
     return a.length>0?a:[dn]
   }
 
+  // Supabase caps responses at 1000 rows — paginate with .range() to get everything
+  const fetchAllSessions=async(sinceISO:string):Promise<Session[]>=>{
+    const PAGE=1000
+    const all:Session[]=[]
+    for(let from=0;from<20000;from+=PAGE){
+      const{data,error}=await supabase
+        .from('sessions')
+        .select('*')
+        .gte('created_at',sinceISO)
+        .order('created_at',{ascending:false})
+        .range(from,from+PAGE-1)
+      if(error||!data||data.length===0)break
+      all.push(...data)
+      if(data.length<PAGE)break
+    }
+    return all
+  }
+
   const load=useCallback(async()=>{
     const cut=new Date();cut.setDate(cut.getDate()-30)
-    const[{data:s},{data:l},{data:a}]=await Promise.all([
-      supabase.from('sessions').select('*').gte('created_at',cut.toISOString()).order('created_at',{ascending:false}).limit(2000),
+    const[s,{data:l},{data:a}]=await Promise.all([
+      fetchAllSessions(cut.toISOString()),
       supabase.from('live_players').select('*').order('joined_at'),
       supabase.from('game_aliases').select('*'),
     ])
