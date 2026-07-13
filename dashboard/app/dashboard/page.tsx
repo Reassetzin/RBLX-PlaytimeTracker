@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V = 'v2.1'
+const V = 'v2.2'
 const BG      = '#111111'
 const SURFACE = '#1c1c1c'
 const ELEV    = '#242424'
@@ -118,7 +118,7 @@ export default function Dashboard() {
   const byDay     = useMemo(()=>byGame.filter(s=>sameDay(new Date(s.created_at),day)),[byGame,day])
   const liveShow  = useMemo(()=>live.filter(p=>game==='all'||p.game_name===game),[live,game])
   const playtime  = useMemo(()=>byDay.reduce((a,s)=>a+s.session_time,0),[byDay])
-  const players   = useMemo(()=>new Set(byGame.map(s=>s.user_id)).size,[byGame])
+  const players   = useMemo(()=>new Set(byGame.map(s=>s.username)).size,[byGame])
   const hourly    = useMemo(()=>buildHourly(byGame,day),[byGame,day])
   const isToday   = sameDay(day,new Date())
 
