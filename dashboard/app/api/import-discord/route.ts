@@ -4,6 +4,8 @@ import { createClient } from '@supabase/supabase-js'
 const BOT_TOKEN  = process.env.DISCORD_BOT_TOKEN!
 const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID!
 
+export const maxDuration = 60 // allow time for full Discord pagination
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!
@@ -54,21 +56,45 @@ async function lookupUserIds(usernames: string[]): Promise<Record<string, number
   return map
 }
 
-async function fetchAllMessages(): Promise<any[]> {
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+async function fetchAllMessages(): Promise<{ messages: any[]; pages: number; stoppedReason: string }> {
   const all: any[] = []
   let before: string | null = null
-  while (true) {
+  let pages = 0
+  let stoppedReason = 'complete'
+
+  while (pages < 60) { // hard cap: 6000 messages
     const beforeParam: string = before ? `&before=${before}` : ''
     const url: string = `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages?limit=100${beforeParam}`
+
     const res = await fetch(url, { headers: { Authorization: `Bot ${BOT_TOKEN}` } })
-    if (!res.ok) break
+
+    // Handle rate limit — wait and retry instead of giving up
+    if (res.status === 429) {
+      const body = await res.json().catch(() => ({ retry_after: 2 }))
+      await sleep((body.retry_after ?? 2) * 1000 + 250)
+      continue // retry same page
+    }
+
+    if (!res.ok) {
+      stoppedReason = `HTTP ${res.status}: ${await res.text()}`
+      break
+    }
+
     const batch = await res.json()
-    if (!Array.isArray(batch) || !batch.length) break
+    if (!Array.isArray(batch) || batch.length === 0) break
+
     all.push(...batch)
     before = batch[batch.length - 1].id
+    pages++
+
     if (batch.length < 100) break
+
+    await sleep(350) // stay under Discord's rate limit
   }
-  return all
+
+  return { messages: all, pages, stoppedReason }
 }
 
 export async function GET(req: Request) {
@@ -102,7 +128,7 @@ export async function GET(req: Request) {
     `${s.username.toLowerCase()}|${s.game_name}|${s.session_count}`
   ))
 
-  const messages = await fetchAllMessages()
+  const { messages, pages, stoppedReason } = await fetchAllMessages()
   const parsed = messages.map(parseMessage).filter(Boolean) as any[]
 
   const toInsert: any[] = []
@@ -146,14 +172,20 @@ export async function GET(req: Request) {
     }
   }
 
+  // Date range of what we fetched — confirms we reached older messages
+  const timestamps = messages.map((m: any) => m.timestamp).filter(Boolean).sort()
+
   return NextResponse.json({
     messagesScanned: messages.length,
+    pagesFetched:    pages,
+    stoppedReason,
+    oldestMessage:   timestamps[0] ?? null,
+    newestMessage:   timestamps[timestamps.length - 1] ?? null,
     embedsParsed:    parsed.length,
     alreadyInDB:     parsed.length - toInsert.length,
     toImport:        toInsert.length,
     inserted:        dry ? '(dry run)' : inserted,
     errors,
     errorSamples,
-    sampleTimestamps: rows.slice(0, 3).map(r => ({ username: r.username, created_at: r.created_at })),
   })
 }
