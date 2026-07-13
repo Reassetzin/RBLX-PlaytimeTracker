@@ -4,9 +4,10 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v2.5'
+const V='v2.6'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
+const TZ='America/New_York' // EST/EDT — all date comparisons use this
 
 type SortKey = 'when'|'session'|'total'|'player'|'count'
 type SortDir = 'asc'|'desc'
@@ -19,18 +20,25 @@ function elapsedSince(d:string,now:Date){return fmt(Math.max(0,Math.floor((now.g
 function timeAgo(d:string){
   const s=Math.floor((Date.now()-new Date(d).getTime())/1000)
   if(s<60)return`${s}s ago`;if(s<3600)return`${Math.floor(s/60)}m ago`
-  if(s<86400)return`${Math.floor(s/3600)}h ago`;return new Date(d).toLocaleDateString()
+  if(s<86400)return`${Math.floor(s/3600)}h ago`
+  return new Date(d).toLocaleDateString('en-US',{timeZone:TZ})
 }
-function toYMD(d:Date){return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`}
-function sameDay(a:Date,b:Date){return toYMD(a)===toYMD(b)}
+// Convert date to YYYY-MM-DD string in EST/EDT
+function toESTDay(d:Date):string{
+  return new Intl.DateTimeFormat('en-CA',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit'}).format(d)
+}
+function sameDay(a:Date,b:Date){return toESTDay(a)===toESTDay(b)}
 function dayLabel(d:Date){
   const t=new Date(),y=new Date();y.setDate(t.getDate()-1)
   if(sameDay(d,t))return'Today';if(sameDay(d,y))return'Yesterday'
-  return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})
+  return d.toLocaleDateString('en-US',{timeZone:TZ,weekday:'short',month:'short',day:'numeric'})
 }
 function buildHourly(sessions:Session[],day:Date){
   const bins=Array.from({length:24},(_,i)=>({h:i===0?'12a':i<12?`${i}a`:i===12?'12p':`${i-12}p`,n:0}))
-  sessions.filter(s=>sameDay(new Date(s.created_at),day)).forEach(s=>{bins[new Date(s.created_at).getHours()].n++})
+  sessions.filter(s=>sameDay(new Date(s.created_at),day)).forEach(s=>{
+    const hr=parseInt(new Intl.DateTimeFormat('en-US',{timeZone:TZ,hour:'numeric',hour12:false}).format(new Date(s.created_at)))
+    bins[hr%24].n++
+  })
   return bins
 }
 
