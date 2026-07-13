@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v3.0'
+const V='v3.1'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 const TZ='America/New_York' // EST/EDT — all date comparisons use this
@@ -242,8 +242,9 @@ export default function Dashboard(){
   }
 
   // Column header button
-  const ColHeader=({label,sortKey,align='left'}:{label:string;sortKey?:SortKey;align?:string})=>(
-    <th style={{padding:'11px 16px',textAlign:align as any,fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:sortKey&&sortBy===sortKey?ACCENT:TEXT3,textTransform:'uppercase',whiteSpace:'nowrap',userSelect:'none',cursor:sortKey?'pointer':'default'}}
+  const ColHeader=({label,sortKey,align='left',hideSm=false}:{label:string;sortKey?:SortKey;align?:string;hideSm?:boolean})=>(
+    <th className={hideSm?'hide-sm':''}
+      style={{textAlign:align as any,color:sortKey&&sortBy===sortKey?ACCENT:TEXT3,cursor:sortKey?'pointer':'default'}}
       onClick={()=>sortKey&&toggleSort(sortKey)}>
       {label}{sortKey&&<span style={{marginLeft:4,opacity:0.6}}>{sortIcon(sortKey)}</span>}
     </th>
@@ -257,7 +258,61 @@ export default function Dashboard(){
 
   return(
     <div style={{minHeight:'100vh',background:BG,color:TEXT,fontFamily:"'Inter',system-ui,sans-serif"}}>
-      <div style={{maxWidth:1100,margin:'0 auto',padding:'24px 16px 64px'}}>
+      <style>{`
+        @keyframes ping{75%,100%{transform:scale(2);opacity:0}}
+
+        .wrap{max-width:1100px;margin:0 auto;padding:24px 16px 64px}
+
+        /* Stat cards */
+        .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px}
+        .stat-card{background:${SURFACE};border:1px solid ${BORDER};border-radius:12px;padding:16px 18px;min-width:0}
+        .stat-label{font-size:11px;font-weight:700;letter-spacing:.07em;color:${TEXT3};text-transform:uppercase;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .stat-val{font-size:26px;font-weight:700;color:${TEXT};line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .stat-sub{font-size:12px;color:${TEXT3};margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+        /* Live player cards */
+        .live-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+        .live-card{background:${SURFACE};border:1px solid ${BORDER};border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:10px;min-width:0}
+        .live-name{font-weight:600;font-size:14px;color:${TEXT};overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .live-game{font-size:12px;color:${TEXT2};margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .live-time{font-size:13px;font-weight:600;color:${GREEN};flex-shrink:0;font-variant-numeric:tabular-nums}
+
+        /* Section labels */
+        .sec{font-size:11px;font-weight:700;letter-spacing:.08em;color:${TEXT3};text-transform:uppercase;margin-bottom:12px}
+
+        /* Game tabs */
+        .tabs{display:flex;gap:8px;overflow-x:auto;margin-bottom:24px;padding-bottom:4px;-ms-overflow-style:none;scrollbar-width:none}
+        .tabs::-webkit-scrollbar{display:none}
+
+        /* Table */
+        .tbl{width:100%;border-collapse:collapse;font-size:13px}
+        .tbl th{padding:11px 14px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;user-select:none}
+        .tbl td{padding:11px 14px;white-space:nowrap}
+        .num{font-variant-numeric:tabular-nums}
+
+        /* ── Mobile ── */
+        @media (max-width:640px){
+          .wrap{padding:16px 12px 48px}
+          .stat-grid{grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:20px}
+          .stat-card{padding:12px 12px}
+          .stat-label{font-size:9px;letter-spacing:.06em;margin-bottom:5px}
+          .stat-val{font-size:19px}
+          .stat-sub{font-size:10px;margin-top:3px}
+          .live-grid{grid-template-columns:1fr;gap:6px}
+          .live-card{padding:10px 12px}
+          .live-name{font-size:13px}
+          .live-game{font-size:11px}
+          .live-time{font-size:12px}
+          .sec{font-size:10px;margin-bottom:8px}
+          .tabs{gap:6px;margin-bottom:18px}
+          .tbl{font-size:12px}
+          .tbl th{padding:9px 10px;font-size:9px}
+          .tbl td{padding:9px 10px}
+          /* Hide low-value columns on phones */
+          .hide-sm{display:none}
+        }
+      `}</style>
+      <div className="wrap">
 
         {/* Header */}
         <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:24}}>
@@ -274,7 +329,6 @@ export default function Dashboard(){
               <span style={{width:8,height:8,borderRadius:'50%',background:GREEN,display:'block'}}/>
             </span>
             <span style={{fontSize:12,fontWeight:600,color:GREEN}}>Live</span>
-            <style>{`@keyframes ping{75%,100%{transform:scale(2);opacity:0}}`}</style>
           </div>
         </div>
 
@@ -290,7 +344,7 @@ export default function Dashboard(){
         </div>
 
         {/* Game Tabs */}
-        <div style={{display:'flex',gap:8,overflowX:'auto',marginBottom:24,paddingBottom:4}}>
+        <div className="tabs">
           <button onClick={()=>setGame('all')}
             style={{padding:'7px 16px',borderRadius:8,fontSize:13,fontWeight:500,border:`1px solid ${game==='all'?ACCENT:BORDER}`,background:game==='all'?ACCENT:'transparent',color:game==='all'?'#fff':TEXT2,cursor:'pointer',flexShrink:0}}>
             All Games
@@ -322,19 +376,19 @@ export default function Dashboard(){
         </div>
 
         {/* Stats */}
-        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12,marginBottom:28}}>
+        <div className="stat-grid">
           {[
             isToday
-              ? {label:'Live Now',    val:liveShow.length,          sub:liveShow.length===1?'1 player in-game':`${liveShow.length} players in-game`}
-              : {label:'Avg Session', val:fmt(avgSession),           sub:`across ${byDay.length} sessions`},
-            {label:dayLabel(day),     val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(avgSession)}`:'—'},
-            {label:'Combined Playtime', val:fmt(playtime), sub:`${byDay.length} sessions ${dayLabel(day).toLowerCase()}`},
-            {label:'Players',         val:players,                   sub:`unique ${dayLabel(day).toLowerCase()}`},
+              ? {label:'Live Now',  val:String(liveShow.length),  sub:liveShow.length===1?'player in-game':'players in-game'}
+              : {label:'Avg',       val:fmt(avgSession),           sub:`over ${byDay.length} sessions`},
+            {label:'Sessions',      val:String(byDay.length),      sub:byDay.length>0?`avg ${fmt(avgSession)}`:dayLabel(day).toLowerCase()},
+            {label:'Playtime',      val:fmt(playtime),             sub:`combined ${dayLabel(day).toLowerCase()}`},
+            {label:'Players',       val:String(players),           sub:`unique ${dayLabel(day).toLowerCase()}`},
           ].map(({label,val,sub})=>(
-            <div key={label} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'18px 20px'}}>
-              <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:TEXT3,textTransform:'uppercase',marginBottom:10}}>{label}</p>
-              <p style={{fontSize:28,fontWeight:700,color:TEXT,lineHeight:1}}>{val}</p>
-              <p style={{fontSize:12,color:TEXT3,marginTop:5}}>{sub}</p>
+            <div key={label} className="stat-card">
+              <p className="stat-label">{label}</p>
+              <p className="stat-val">{val}</p>
+              <p className="stat-sub">{sub}</p>
             </div>
           ))}
         </div>
@@ -342,24 +396,24 @@ export default function Dashboard(){
         {/* Live Now — today only */}
         {isToday&&(
           <div style={{marginBottom:28}}>
-            <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase',marginBottom:12}}>Live Now</p>
+            <p className="sec">Live Now</p>
             {liveShow.length===0?(
               <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:28,textAlign:'center'}}>
                 <p style={{color:TEXT3,fontSize:13}}>No players in-game</p>
               </div>
             ):(
-              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(250px,1fr))',gap:8}}>
+              <div className="live-grid">
                 {liveShow.map(p=>(
-                  <div key={p.user_id} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
+                  <div key={p.user_id} className="live-card">
                     <span style={{position:'relative',display:'inline-flex',width:8,height:8,flexShrink:0}}>
                       <span style={{position:'absolute',inset:0,borderRadius:'50%',background:GREEN,opacity:0.4,animation:'ping 1.5s infinite'}}/>
                       <span style={{width:8,height:8,borderRadius:'50%',background:GREEN,display:'block'}}/>
                     </span>
                     <div style={{flex:1,minWidth:0}}>
-                      <p style={{fontWeight:600,fontSize:14,color:TEXT,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.username}</p>
-                      <p style={{fontSize:12,color:TEXT2,marginTop:2}}>{display(p.game_name)}</p>
+                      <p className="live-name">{p.username}</p>
+                      <p className="live-game">{display(p.game_name)}</p>
                     </div>
-                    <p style={{fontSize:13,fontWeight:600,color:GREEN,flexShrink:0,fontVariantNumeric:'tabular-nums'}}>{elapsedSince(p.joined_at,now)}</p>
+                    <p className="live-time">{elapsedSince(p.joined_at,now)}</p>
                   </div>
                 ))}
               </div>
@@ -369,7 +423,7 @@ export default function Dashboard(){
 
         {/* Chart */}
         <div style={{marginBottom:28}}>
-          <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase',marginBottom:12}}>Sessions by Hour — {dayLabel(day)}</p>
+          <p className="sec">Sessions by Hour — {dayLabel(day)}</p>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'16px 12px 8px'}}>
             {byDay.length===0?(
               <div style={{height:120,display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -407,61 +461,60 @@ export default function Dashboard(){
               style={{padding:'7px 14px',borderRadius:8,background:SURFACE,border:`1px solid ${BORDER}`,color:TEXT,fontSize:13,width:180,outline:'none'}}/>
           </div>
 
-          <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase',marginBottom:12}}>
+          <p className="sec">
             {view==='sessions'
-              ? `Session History — ${dayLabel(day)}`
-              : `Player Leaderboard — ${game==='all'?'All Games':game}`}
+              ? `Sessions — ${dayLabel(day)}`
+              : `Leaderboard — ${game==='all'?'All Games':game}`}
           </p>
 
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
             <div style={{overflowX:'auto'}}>
 
               {view==='sessions'?(
-                <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                <table className="tbl">
                   <thead>
                     <tr style={{borderBottom:`1px solid ${BORDER}`}}>
                       <ColHeader label="Player"  sortKey="player" />
-                      <ColHeader label="Game" />
+                      <ColHeader label="Game" hideSm />
                       <ColHeader label="Session" sortKey="session" />
-                      <ColHeader label="Total"   sortKey="total" />
-                      <ColHeader label="#"       sortKey="count" />
+                      <ColHeader label="Total"   sortKey="total" hideSm />
+                      <ColHeader label="#"       sortKey="count" hideSm />
                       <ColHeader label="When"    sortKey="when"  align="right" />
                     </tr>
                   </thead>
                   <tbody>
                     {sorted.length===0?(
-                      <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3,fontSize:13}}>
+                      <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3}}>
                         {search?`No results for "${search}"`:`No sessions on ${dayLabel(day).toLowerCase()}`}
                       </td></tr>
                     ):sorted.slice(0,100).map(s=>(
                       <tr key={s.id} style={{borderBottom:`1px solid ${BORDER}`}}>
-                        <td style={{padding:'11px 16px',fontWeight:600,color:TEXT}}>{s.username}</td>
-                        <td style={{padding:'11px 16px'}}>
+                        <td style={{fontWeight:600,color:TEXT,maxWidth:130,overflow:'hidden',textOverflow:'ellipsis'}}>{s.username}</td>
+                        <td className="hide-sm">
                           <span style={{padding:'2px 8px',borderRadius:5,background:ELEV,color:TEXT2,fontSize:12,fontWeight:500}}>{display(s.game_name)}</span>
                         </td>
-                        <td style={{padding:'11px 16px',color:TEXT,fontVariantNumeric:'tabular-nums'}}>{fmt(s.session_time)}</td>
-                        <td style={{padding:'11px 16px',color:TEXT2,fontVariantNumeric:'tabular-nums'}}>{fmt(s.total_time)}</td>
-                        <td style={{padding:'11px 16px',color:TEXT3}}>#{s.session_count}</td>
-                        <td style={{padding:'11px 16px',color:TEXT3,textAlign:'right'}}>{timeAgo(s.created_at)}</td>
+                        <td className="num" style={{color:TEXT}}>{fmt(s.session_time)}</td>
+                        <td className="num hide-sm" style={{color:TEXT2}}>{fmt(s.total_time)}</td>
+                        <td className="hide-sm" style={{color:TEXT3}}>#{s.session_count}</td>
+                        <td style={{color:TEXT3,textAlign:'right'}}>{timeAgo(s.created_at)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ):(
-                <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                <table className="tbl">
                   <thead>
                     <tr style={{borderBottom:`1px solid ${BORDER}`}}>
-                      <th style={{padding:'11px 16px',textAlign:'center',fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:TEXT3,width:52}}>#</th>
+                      <th style={{textAlign:'center',color:TEXT3,width:44}}>#</th>
                       {([
-                        {l:'Player',    k:'name'     as PSortKey, a:'left'},
-                        {l:'Playtime',  k:'total'    as PSortKey, a:'left'},
-                        {l:'Sessions',  k:'sessions' as PSortKey, a:'left'},
-                        {l:'Avg',       k:'avg'      as PSortKey, a:'left'},
-                        {l:'Last Seen', k:'last'     as PSortKey, a:'right'},
-                      ]).map(({l,k,a})=>(
-                        <th key={l} onClick={()=>togglePSort(k)}
-                          style={{padding:'11px 16px',textAlign:a as any,fontSize:11,fontWeight:700,letterSpacing:'0.07em',
-                            color:pSortBy===k?ACCENT:TEXT3,textTransform:'uppercase',whiteSpace:'nowrap',cursor:'pointer',userSelect:'none'}}>
+                        {l:'Player',   k:'name'     as PSortKey, a:'left',  h:false},
+                        {l:'Playtime', k:'total'    as PSortKey, a:'left',  h:false},
+                        {l:'Sess',     k:'sessions' as PSortKey, a:'left',  h:false},
+                        {l:'Avg',      k:'avg'      as PSortKey, a:'left',  h:true},
+                        {l:'Last Seen',k:'last'     as PSortKey, a:'right', h:true},
+                      ]).map(({l,k,a,h})=>(
+                        <th key={l} onClick={()=>togglePSort(k)} className={h?'hide-sm':''}
+                          style={{textAlign:a as any,color:pSortBy===k?ACCENT:TEXT3,cursor:'pointer'}}>
                           {l}<span style={{marginLeft:4,opacity:0.6}}>{pSortIcon(k)}</span>
                         </th>
                       ))}
@@ -469,21 +522,21 @@ export default function Dashboard(){
                   </thead>
                   <tbody>
                     {playerSorted.length===0?(
-                      <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3,fontSize:13}}>
+                      <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3}}>
                         {search?`No results for "${search}"`:'No players yet'}
                       </td></tr>
                     ):playerSorted.slice(0,100).map((r,i)=>{
-                      const isTop3 = pSortBy==='total' && pSortDir==='desc' && i<3
+                      const ranked = pSortBy==='total' && pSortDir==='desc'
                       return(
                         <tr key={r.username} style={{borderBottom:`1px solid ${BORDER}`}}>
-                          <td style={{padding:'11px 16px',textAlign:'center',fontSize:isTop3?16:12,color:TEXT3,fontWeight:600}}>
-                            {pSortBy==='total'&&pSortDir==='desc'?medal(i):i+1}
+                          <td style={{textAlign:'center',fontSize:ranked&&i<3?15:12,color:TEXT3,fontWeight:600}}>
+                            {ranked?medal(i):i+1}
                           </td>
-                          <td style={{padding:'11px 16px',fontWeight:600,color:TEXT}}>{r.username}</td>
-                          <td style={{padding:'11px 16px',color:TEXT,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>{fmt(r.totalTime)}</td>
-                          <td style={{padding:'11px 16px',color:TEXT2,fontVariantNumeric:'tabular-nums'}}>{r.sessions}</td>
-                          <td style={{padding:'11px 16px',color:TEXT2,fontVariantNumeric:'tabular-nums'}}>{fmt(r.avg)}</td>
-                          <td style={{padding:'11px 16px',color:TEXT3,textAlign:'right'}}>{timeAgo(r.last)}</td>
+                          <td style={{fontWeight:600,color:TEXT,maxWidth:130,overflow:'hidden',textOverflow:'ellipsis'}}>{r.username}</td>
+                          <td className="num" style={{color:TEXT,fontWeight:600}}>{fmt(r.totalTime)}</td>
+                          <td className="num" style={{color:TEXT2}}>{r.sessions}</td>
+                          <td className="num hide-sm" style={{color:TEXT2}}>{fmt(r.avg)}</td>
+                          <td className="hide-sm" style={{color:TEXT3,textAlign:'right'}}>{timeAgo(r.last)}</td>
                         </tr>
                       )
                     })}
