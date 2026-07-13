@@ -9,8 +9,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!
 )
 
-// ── Parsers ────────────────────────────────────────────────────────────────
-
 function parseTime(s: string): number {
   s = s.replace(/`/g, '').trim()
   let t = 0
@@ -19,117 +17,108 @@ function parseTime(s: string): number {
   const sec = s.match(/(\d+)s/); if (sec) t += parseInt(sec[1])
   return t
 }
-
 function parseOrdinal(s: string): number {
   return parseInt(s.replace(/`/g, '').replace(/[a-z]+$/i, '')) || 0
 }
-
 function field(fields: any[], name: string): string {
   return (fields.find((f: any) => f.name.includes(name))?.value || '').replace(/`/g, '').trim()
 }
-
 function parseMessage(msg: any) {
   const embed = msg.embeds?.[0]
   if (!embed?.fields?.length) return null
-
-  const username    = field(embed.fields, 'Player')
+  const username = field(embed.fields, 'Player')
   if (!username) return null
-
   const sessionTime  = parseTime(field(embed.fields, 'Session'))
   const totalTime    = parseTime(field(embed.fields, 'Total'))
   const sessionCount = parseOrdinal(field(embed.fields, 'Sessions'))
-  const gameName     = field(embed.fields, 'Game') || 'Merge a Capybara'
-  const createdAt    = embed.timestamp || msg.timestamp
-
+  const gameName     = field(embed.fields, 'Game') || 'Merge a Capybara!'
+  // Use Discord message timestamp (most reliable - always set by Discord)
+  const createdAt    = msg.timestamp
   if (!sessionTime && !totalTime) return null
-
   return { username, sessionTime, totalTime, sessionCount, gameName, createdAt }
 }
 
-// ── Roblox user ID lookup ──────────────────────────────────────────────────
-
 async function lookupUserIds(usernames: string[]): Promise<Record<string, number>> {
   const map: Record<string, number> = {}
-  // Batch 100 at a time
   for (let i = 0; i < usernames.length; i += 100) {
-    const batch = usernames.slice(i, i + 100)
     try {
       const res = await fetch('https://users.roblox.com/v1/usernames/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ usernames: batch, excludeBannedUsers: false }),
+        body: JSON.stringify({ usernames: usernames.slice(i, i + 100), excludeBannedUsers: false }),
       })
       const data = await res.json()
-      for (const u of data.data || []) {
-        map[u.name.toLowerCase()] = u.id
-      }
-    } catch { /* skip if Roblox API fails */ }
+      for (const u of data.data || []) map[u.name.toLowerCase()] = u.id
+    } catch { /* skip */ }
   }
   return map
 }
 
-// ── Fetch all Discord messages ─────────────────────────────────────────────
-
 async function fetchAllMessages(): Promise<any[]> {
   const all: any[] = []
   let before: string | null = null
-
   while (true) {
     const beforeParam: string = before ? `&before=${before}` : ''
     const url: string = `https://discord.com/api/v10/channels/${CHANNEL_ID}/messages?limit=100${beforeParam}`
     const res = await fetch(url, { headers: { Authorization: `Bot ${BOT_TOKEN}` } })
     if (!res.ok) break
-
     const batch = await res.json()
     if (!Array.isArray(batch) || !batch.length) break
-
     all.push(...batch)
     before = batch[batch.length - 1].id
     if (batch.length < 100) break
   }
-
   return all
 }
 
-// ── Route ─────────────────────────────────────────────────────────────────
-
 export async function GET(req: Request) {
   const dry = new URL(req.url).searchParams.get('dry') === 'true'
-
   if (!BOT_TOKEN || !CHANNEL_ID) {
-    return NextResponse.json({ error: 'Missing DISCORD_BOT_TOKEN or DISCORD_CHANNEL_ID env vars' }, { status: 400 })
+    return NextResponse.json({ error: 'Missing env vars' }, { status: 400 })
   }
 
-  // 1. Fetch existing sessions for dedup
-  const { data: existing } = await supabase.from('sessions').select('username, game_name, session_count')
-  const existingKeys = new Set((existing || []).map((s: any) => `${s.username.toLowerCase()}|${s.game_name}|${s.session_count}`))
+  // Verify created_at can be set before doing anything
+  if (!dry) {
+    const testTs = '2000-01-01T00:00:00.000Z'
+    const { data: testInsert } = await supabase
+      .from('sessions')
+      .insert({ username: '__test__', user_id: 0, game_name: '__test__', session_time: 1, total_time: 1, session_count: 1, created_at: testTs })
+      .select('created_at')
+      .single()
 
-  // 2. Fetch all Discord messages
+    await supabase.from('sessions').delete().eq('username', '__test__')
+
+    if (testInsert?.created_at?.startsWith('2000') === false) {
+      return NextResponse.json({
+        error: 'Supabase is ignoring the created_at value — check SUPABASE_SERVICE_KEY env var',
+        stored: testInsert?.created_at,
+        expected: testTs,
+      }, { status: 500 })
+    }
+  }
+
+  const { data: existing } = await supabase.from('sessions').select('username, game_name, session_count, created_at')
+  const existingKeys = new Set((existing || []).map((s: any) =>
+    `${s.username.toLowerCase()}|${s.game_name}|${s.session_count}`
+  ))
+
   const messages = await fetchAllMessages()
-
-  // 3. Parse embeds
   const parsed = messages.map(parseMessage).filter(Boolean) as any[]
 
-  // 4. Deduplicate
   const toInsert: any[] = []
   const seen = new Set<string>()
-
   for (const s of parsed) {
-    // Use session_count if available, otherwise fall back to timestamp-minute
     const key = s.sessionCount > 0
       ? `${s.username.toLowerCase()}|${s.gameName}|${s.sessionCount}`
       : `${s.username.toLowerCase()}|${s.gameName}|${Math.floor(new Date(s.createdAt).getTime() / 60000)}`
-
     if (existingKeys.has(key) || seen.has(key)) continue
     seen.add(key)
     toInsert.push(s)
   }
 
-  // 5. Look up Roblox user IDs
   const uniqueUsernames = [...new Set(toInsert.map(s => s.username))]
   const userIdMap = await lookupUserIds(uniqueUsernames)
 
-  // 6. Build insert rows
   const rows = toInsert.map(s => ({
     username:      s.username,
     user_id:       userIdMap[s.username.toLowerCase()] ?? 0,
@@ -137,16 +126,23 @@ export async function GET(req: Request) {
     session_time:  s.sessionTime,
     total_time:    s.totalTime,
     session_count: s.sessionCount || 1,
-    created_at:    s.createdAt,
+    created_at:    new Date(s.createdAt).toISOString(),
   }))
 
-  // 7. Insert (skip if dry run)
-  let inserted = 0, errors = 0
+  let inserted = 0, errors = 0, errorSamples: any[] = []
   if (!dry) {
-    for (let i = 0; i < rows.length; i += 50) {
-      const { error } = await supabase.from('sessions').insert(rows.slice(i, i + 50))
-      if (!error) inserted += Math.min(50, rows.length - i)
-      else errors++
+    for (let i = 0; i < rows.length; i += 25) {
+      const batch = rows.slice(i, i + 25)
+      const { error, data } = await supabase
+        .from('sessions')
+        .insert(batch)
+        .select('created_at')
+      if (!error) {
+        inserted += batch.length
+      } else {
+        errors++
+        if (errorSamples.length < 3) errorSamples.push(error.message)
+      }
     }
   }
 
@@ -157,6 +153,7 @@ export async function GET(req: Request) {
     toImport:        toInsert.length,
     inserted:        dry ? '(dry run)' : inserted,
     errors,
-    preview:         rows.slice(0, 5), // show first 5 for verification
-  }, { status: 200 })
+    errorSamples,
+    sampleTimestamps: rows.slice(0, 3).map(r => ({ username: r.username, created_at: r.created_at })),
+  })
 }
