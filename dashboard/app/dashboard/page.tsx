@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v2.6'
+const V='v2.7'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 const TZ='America/New_York' // EST/EDT — all date comparisons use this
@@ -140,7 +140,7 @@ export default function Dashboard(){
   const avgSession=byDay.length>0?Math.floor(playtime/byDay.length):0
 
   const sorted=useMemo(()=>{
-    const filtered=byGame.filter(s=>!search||s.username.toLowerCase().includes(search.toLowerCase()))
+    const filtered=byDay.filter(s=>!search||s.username.toLowerCase().includes(search.toLowerCase()))
     return[...filtered].sort((a,b)=>{
       let diff=0
       if(sortBy==='session') diff=a.session_time-b.session_time
@@ -150,7 +150,7 @@ export default function Dashboard(){
       else diff=new Date(a.created_at).getTime()-new Date(b.created_at).getTime()
       return sortDir==='desc'?-diff:diff
     })
-  },[byGame,search,sortBy,sortDir])
+  },[byDay,search,sortBy,sortDir])
 
   const ChartTip=({active,payload,label}:any)=>{
     if(!active||!payload?.length)return null
@@ -312,7 +312,7 @@ export default function Dashboard(){
         {/* Table */}
         <div>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,flexWrap:'wrap',gap:8}}>
-            <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase'}}>Session History</p>
+            <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase'}}>Session History — {dayLabel(day)}</p>
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search player…"
               style={{padding:'7px 14px',borderRadius:8,background:SURFACE,border:`1px solid ${BORDER}`,color:TEXT,fontSize:13,width:180,outline:'none'}}/>
           </div>
@@ -332,7 +332,7 @@ export default function Dashboard(){
                 <tbody>
                   {sorted.length===0?(
                     <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3,fontSize:13}}>
-                      {search?`No results for "${search}"`:'No sessions yet'}
+                      {search?`No results for "${search}"`:`No sessions on ${dayLabel(day).toLowerCase()}`}
                     </td></tr>
                   ):sorted.slice(0,100).map(s=>(
                     <tr key={s.id} style={{borderBottom:`1px solid ${BORDER}`}}>
