@@ -4,66 +4,71 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V = 'v2.2'
-const BG      = '#111111'
-const SURFACE = '#1c1c1c'
-const ELEV    = '#242424'
-const BORDER  = '#2e2e2e'
-const ACCENT  = '#60a5fa'
-const GREEN   = '#4ade80'
-const TEXT    = '#f0f0f0'
-const TEXT2   = '#888'
-const TEXT3   = '#444'
+const V = 'v2.3'
+const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
+const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 
-function fmt(s: number) {
-  s = Math.floor(s)
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
-  if (h > 0) return `${h}h ${m}m ${sec}s`
-  if (m > 0) return `${m}m ${sec}s`
-  return `${sec}s`
+function fmt(s:number){
+  s=Math.floor(s);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60
+  if(h>0)return`${h}h ${m}m ${sec}s`;if(m>0)return`${m}m ${sec}s`;return`${sec}s`
 }
-function elapsedSince(d: string, now: Date) { return fmt(Math.max(0, Math.floor((now.getTime() - new Date(d).getTime()) / 1000))) }
-function timeAgo(d: string) {
-  const s = Math.floor((Date.now() - new Date(d).getTime()) / 1000)
-  if (s < 60) return `${s}s ago`; if (s < 3600) return `${Math.floor(s/60)}m ago`
-  if (s < 86400) return `${Math.floor(s/3600)}h ago`; return new Date(d).toLocaleDateString()
+function elapsedSince(d:string,now:Date){return fmt(Math.max(0,Math.floor((now.getTime()-new Date(d).getTime())/1000)))}
+function timeAgo(d:string){
+  const s=Math.floor((Date.now()-new Date(d).getTime())/1000)
+  if(s<60)return`${s}s ago`;if(s<3600)return`${Math.floor(s/60)}m ago`
+  if(s<86400)return`${Math.floor(s/3600)}h ago`;return new Date(d).toLocaleDateString()
 }
-function sameDay(a: Date, b: Date) { return a.toDateString() === b.toDateString() }
-function dayLabel(d: Date) {
-  const t = new Date(), y = new Date(); y.setDate(t.getDate()-1)
-  if (sameDay(d,t)) return 'Today'; if (sameDay(d,y)) return 'Yesterday'
+function sameDay(a:Date,b:Date){return a.toDateString()===b.toDateString()}
+function dayLabel(d:Date){
+  const t=new Date(),y=new Date();y.setDate(t.getDate()-1)
+  if(sameDay(d,t))return'Today';if(sameDay(d,y))return'Yesterday'
   return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})
 }
-function buildHourly(sessions: Session[], day: Date) {
-  const bins = Array.from({length:24},(_,i)=>({h:i===0?'12a':i<12?`${i}a`:i===12?'12p':`${i-12}p`,n:0}))
+function buildHourly(sessions:Session[],day:Date){
+  const bins=Array.from({length:24},(_,i)=>({h:i===0?'12a':i<12?`${i}a`:i===12?'12p':`${i-12}p`,n:0}))
   sessions.filter(s=>sameDay(new Date(s.created_at),day)).forEach(s=>{bins[new Date(s.created_at).getHours()].n++})
   return bins
 }
 
-export default function Dashboard() {
-  const [sessions, setSessions]         = useState<Session[]>([])
-  const [live, setLive]                 = useState<LivePlayer[]>([])
-  const [games, setGames]               = useState<string[]>([])
-  const [game, setGame]                 = useState('all')
-  const [day, setDay]                   = useState(new Date())
-  const [search, setSearch]             = useState('')
-  const [now, setNow]                   = useState(new Date())
-  const [loading, setLoading]           = useState(true)
-  const [renamingGame, setRenamingGame] = useState<string|null>(null)
-  const [renameVal, setRenameVal]       = useState('')
-  const [saving, setSaving]             = useState(false)
-  const renameRef                       = useRef<HTMLInputElement>(null)
+export default function Dashboard(){
+  const[sessions,setSessions]         =useState<Session[]>([])
+  const[live,setLive]                 =useState<LivePlayer[]>([])
+  const[aliases,setAliases]           =useState<Record<string,string>>({}) // raw → display
+  const[game,setGame]                 =useState('all')
+  const[day,setDay]                   =useState(new Date())
+  const[search,setSearch]             =useState('')
+  const[now,setNow]                   =useState(new Date())
+  const[loading,setLoading]           =useState(true)
+  const[renamingGame,setRenamingGame] =useState<string|null>(null) // display name being renamed
+  const[renameVal,setRenameVal]       =useState('')
+  const[saving,setSaving]             =useState(false)
+  const renameRef                     =useRef<HTMLInputElement>(null)
 
   useEffect(()=>{const id=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(id)},[])
 
-  const load = useCallback(async()=>{
-    const cut=new Date(); cut.setDate(cut.getDate()-30)
-    const[{data:s},{data:l}]=await Promise.all([
+  // Aliases: raw_name → display_name
+  const display=(raw:string)=>aliases[raw]||raw
+
+  // Raw names that currently show under a given display name
+  const rawsFor=(displayName:string):string[]=>{
+    const aliased=Object.entries(aliases).filter(([,v])=>v===displayName).map(([k])=>k)
+    return aliased.length>0?aliased:[displayName]
+  }
+
+  const load=useCallback(async()=>{
+    const cut=new Date();cut.setDate(cut.getDate()-30)
+    const[{data:s},{data:l},{data:a}]=await Promise.all([
       supabase.from('sessions').select('*').gte('created_at',cut.toISOString()).order('created_at',{ascending:false}).limit(2000),
       supabase.from('live_players').select('*').order('joined_at'),
+      supabase.from('game_aliases').select('*'),
     ])
-    if(s){setSessions(s);setGames([...new Set(s.map((x:Session)=>x.game_name))].sort())}
+    if(s) setSessions(s)
     if(l) setLive(l)
+    if(a){
+      const map:Record<string,string>={}
+      a.forEach((row:any)=>{map[row.raw_name]=row.display_name})
+      setAliases(map)
+    }
     setLoading(false)
   },[])
 
@@ -73,7 +78,6 @@ export default function Dashboard() {
     const ch=supabase.channel('rt')
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'sessions'},({new:s})=>{
         setSessions(p=>[s as Session,...p])
-        setGames(p=>p.includes((s as Session).game_name)?p:[...p,(s as Session).game_name].sort())
       })
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'live_players'},({new:p})=>{
         setLive(prev=>prev.find(x=>x.user_id===(p as LivePlayer).user_id)?prev:[...prev,p as LivePlayer])
@@ -85,54 +89,67 @@ export default function Dashboard() {
     return()=>{supabase.removeChannel(ch)}
   },[])
 
+  // Unique display-name tabs
+  const games=useMemo(()=>{
+    const rawGames=[...new Set(sessions.map(s=>s.game_name))]
+    return[...new Set(rawGames.map(display))].sort()
+  },[sessions,aliases])
+
   const startRename=(g:string)=>{setRenamingGame(g);setRenameVal(g);setTimeout(()=>renameRef.current?.focus(),50)}
   const cancelRename=()=>setRenamingGame(null)
+
   const commitRename=async()=>{
-    if(!renamingGame) return
-    const n=renameVal.trim(); if(!n||n===renamingGame){cancelRename();return}
+    if(!renamingGame)return
+    const newName=renameVal.trim()
+    if(!newName||newName===renamingGame){cancelRename();return}
     setSaving(true)
-    await Promise.all([
-      supabase.from('sessions').update({game_name:n}).eq('game_name',renamingGame),
-      supabase.from('live_players').update({game_name:n}).eq('game_name',renamingGame),
-    ])
-    setSessions(p=>p.map(s=>s.game_name===renamingGame?{...s,game_name:n}:s))
-    setLive(p=>p.map(x=>x.game_name===renamingGame?{...x,game_name:n}:x))
-    setGames(p=>[...new Set(p.map(g=>g===renamingGame?n:g))].sort())
-    if(game===renamingGame) setGame(n)
-    setRenamingGame(null); setSaving(false)
-  }
-  const deleteGame=async(g:string)=>{
-    if(!confirm(`Delete all data for "${g}"? This cannot be undone.`)) return
-    await Promise.all([
-      supabase.from('sessions').delete().eq('game_name',g),
-      supabase.from('live_players').delete().eq('game_name',g),
-    ])
-    setSessions(p=>p.filter(s=>s.game_name!==g))
-    setLive(p=>p.filter(x=>x.game_name!==g))
-    setGames(p=>p.filter(x=>x!==g))
-    if(game===g) setGame('all')
+    // Find all raw names currently mapped to this display name
+    const raws=rawsFor(renamingGame)
+    // Upsert alias for each raw name
+    await Promise.all(raws.map(raw=>
+      supabase.from('game_aliases').upsert({raw_name:raw,display_name:newName})
+    ))
+    setAliases(prev=>{
+      const next={...prev}
+      raws.forEach(raw=>{next[raw]=newName})
+      return next
+    })
+    if(game===renamingGame)setGame(newName)
+    setRenamingGame(null);setSaving(false)
   }
 
-  const byGame    = useMemo(()=>sessions.filter(s=>game==='all'||s.game_name===game),[sessions,game])
-  const bySearch  = useMemo(()=>byGame.filter(s=>!search||s.username.toLowerCase().includes(search.toLowerCase())),[byGame,search])
-  const byDay     = useMemo(()=>byGame.filter(s=>sameDay(new Date(s.created_at),day)),[byGame,day])
-  const liveShow  = useMemo(()=>live.filter(p=>game==='all'||p.game_name===game),[live,game])
-  const playtime  = useMemo(()=>byDay.reduce((a,s)=>a+s.session_time,0),[byDay])
-  const players   = useMemo(()=>new Set(byGame.map(s=>s.username)).size,[byGame])
-  const hourly    = useMemo(()=>buildHourly(byGame,day),[byGame,day])
-  const isToday   = sameDay(day,new Date())
+  const deleteGame=async(g:string)=>{
+    if(!confirm(`Delete all data for "${g}"? This cannot be undone.`))return
+    const raws=rawsFor(g)
+    await Promise.all([
+      ...raws.map(raw=>supabase.from('sessions').delete().eq('game_name',raw)),
+      ...raws.map(raw=>supabase.from('live_players').delete().eq('game_name',raw)),
+      ...raws.map(raw=>supabase.from('game_aliases').delete().eq('raw_name',raw)),
+    ])
+    setSessions(p=>p.filter(s=>!raws.includes(s.game_name)))
+    setLive(p=>p.filter(x=>!raws.includes(x.game_name)))
+    setAliases(prev=>{const next={...prev};raws.forEach(r=>delete next[r]);return next})
+    if(game===g)setGame('all')
+  }
+
+  const byGame   =useMemo(()=>sessions.filter(s=>game==='all'||display(s.game_name)===game),[sessions,game,aliases])
+  const bySearch =useMemo(()=>byGame.filter(s=>!search||s.username.toLowerCase().includes(search.toLowerCase())),[byGame,search])
+  const byDay    =useMemo(()=>byGame.filter(s=>sameDay(new Date(s.created_at),day)),[byGame,day])
+  const liveShow =useMemo(()=>live.filter(p=>game==='all'||display(p.game_name)===game),[live,game,aliases])
+  const playtime =useMemo(()=>byDay.reduce((a,s)=>a+s.session_time,0),[byDay])
+  const players  =useMemo(()=>new Set(byGame.map(s=>s.username)).size,[byGame])
+  const hourly   =useMemo(()=>buildHourly(byGame,day),[byGame,day])
+  const isToday  =sameDay(day,new Date())
 
   const ChartTip=({active,payload,label}:any)=>{
-    if(!active||!payload?.length) return null
-    return <div style={{background:ELEV,border:`1px solid ${BORDER}`,borderRadius:8,padding:'8px 12px'}}>
+    if(!active||!payload?.length)return null
+    return<div style={{background:ELEV,border:`1px solid ${BORDER}`,borderRadius:8,padding:'8px 12px'}}>
       <p style={{fontSize:11,color:TEXT2}}>{label}</p>
       <p style={{fontSize:15,fontWeight:700,color:ACCENT}}>{payload[0].value}</p>
     </div>
   }
 
-  const btn=(bg:string,color:string,extra={})=>({background:bg,color,border:'none',cursor:'pointer',...extra})
-
-  if(loading) return(
+  if(loading)return(
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:BG}}>
       <p style={{color:TEXT2,fontSize:14}}>Loading…</p>
     </div>
@@ -165,40 +182,38 @@ export default function Dashboard() {
         <div style={{display:'flex',justifyContent:'center',marginBottom:24}}>
           <div style={{display:'flex',borderRadius:10,overflow:'hidden',border:`1px solid ${BORDER}`}}>
             <button onClick={()=>{const d=new Date(day);d.setDate(d.getDate()-1);setDay(d)}}
-              style={{...btn(SURFACE,TEXT2),padding:'8px 18px',fontSize:14,borderRight:`1px solid ${BORDER}`}}>←</button>
-            <div style={{padding:'8px 24px',background:ELEV,fontSize:14,fontWeight:600,color:TEXT,minWidth:130,textAlign:'center'}}>
-              {dayLabel(day)}
-            </div>
+              style={{padding:'8px 18px',fontSize:14,background:SURFACE,color:TEXT2,border:'none',borderRight:`1px solid ${BORDER}`,cursor:'pointer'}}>←</button>
+            <div style={{padding:'8px 24px',background:ELEV,fontSize:14,fontWeight:600,color:TEXT,minWidth:130,textAlign:'center'}}>{dayLabel(day)}</div>
             <button onClick={()=>{if(!isToday){const d=new Date(day);d.setDate(d.getDate()+1);setDay(d)}}}
-              style={{...btn(SURFACE,isToday?TEXT3:TEXT2),padding:'8px 18px',fontSize:14,borderLeft:`1px solid ${BORDER}`,opacity:isToday?0.35:1}}>→</button>
+              style={{padding:'8px 18px',fontSize:14,background:SURFACE,color:isToday?TEXT3:TEXT2,border:'none',borderLeft:`1px solid ${BORDER}`,cursor:isToday?'default':'pointer',opacity:isToday?0.35:1}}>→</button>
           </div>
         </div>
 
         {/* Game Tabs */}
         <div style={{display:'flex',gap:8,overflowX:'auto',marginBottom:24,paddingBottom:4}}>
           <button onClick={()=>setGame('all')}
-            style={{...btn(game==='all'?ACCENT:'transparent',game==='all'?'#fff':TEXT2),padding:'7px 16px',borderRadius:8,fontSize:13,fontWeight:500,border:`1px solid ${game==='all'?ACCENT:BORDER}`,flexShrink:0,transition:'all 0.15s'}}>
+            style={{padding:'7px 16px',borderRadius:8,fontSize:13,fontWeight:500,border:`1px solid ${game==='all'?ACCENT:BORDER}`,background:game==='all'?ACCENT:'transparent',color:game==='all'?'#fff':TEXT2,cursor:'pointer',flexShrink:0}}>
             All Games
           </button>
           {games.map(g=>(
             <div key={g} style={{display:'flex',flexShrink:0,borderRadius:8,overflow:'hidden',border:`1px solid ${BORDER}`,background:SURFACE}}>
               {renamingGame===g?(
-                <div style={{display:'flex',alignItems:'center',gap:4,padding:'0 10px',borderColor:ACCENT,borderWidth:1,borderStyle:'solid',borderRadius:8}}>
+                <div style={{display:'flex',alignItems:'center',gap:4,padding:'0 10px',border:`1px solid ${ACCENT}`,borderRadius:8}}>
                   <input ref={renameRef} value={renameVal} onChange={e=>setRenameVal(e.target.value)}
                     onKeyDown={e=>{if(e.key==='Enter')commitRename();if(e.key==='Escape')cancelRename()}}
-                    style={{background:'transparent',border:'none',color:TEXT,fontSize:13,width:110,outline:'none'}}/>
-                  <button onClick={commitRename} disabled={saving} style={{...btn('transparent',GREEN),fontSize:14,padding:'0 3px'}}>{saving?'…':'✓'}</button>
-                  <button onClick={cancelRename} style={{...btn('transparent',TEXT3),fontSize:14,padding:'0 3px'}}>✕</button>
+                    style={{background:'transparent',border:'none',color:TEXT,fontSize:13,width:130,outline:'none'}}/>
+                  <button onClick={commitRename} disabled={saving} style={{background:'none',border:'none',color:GREEN,fontSize:14,cursor:'pointer',padding:'0 3px'}}>{saving?'…':'✓'}</button>
+                  <button onClick={cancelRename} style={{background:'none',border:'none',color:TEXT3,fontSize:14,cursor:'pointer',padding:'0 3px'}}>✕</button>
                 </div>
               ):(
                 <>
                   <button onClick={()=>setGame(g)}
-                    style={{...btn('transparent',game===g?TEXT:TEXT2),padding:'7px 14px',fontSize:13,fontWeight:game===g?600:400}}>
+                    style={{padding:'7px 14px',fontSize:13,fontWeight:game===g?600:400,background:'transparent',border:'none',color:game===g?TEXT:TEXT2,cursor:'pointer'}}>
                     {g}
                   </button>
                   <div style={{display:'flex',borderLeft:`1px solid ${BORDER}`}}>
-                    <button onClick={()=>startRename(g)} title="Rename" style={{...btn('transparent',TEXT3),padding:'7px 9px',fontSize:12}}>✏️</button>
-                    <button onClick={()=>deleteGame(g)} title="Delete" style={{...btn('transparent',TEXT3),padding:'7px 9px',fontSize:12,borderLeft:`1px solid ${BORDER}`}}>🗑️</button>
+                    <button onClick={()=>startRename(g)} title="Rename" style={{padding:'7px 9px',fontSize:12,background:'transparent',border:'none',color:TEXT3,cursor:'pointer'}}>✏️</button>
+                    <button onClick={()=>deleteGame(g)} title="Delete" style={{padding:'7px 9px',fontSize:12,background:'transparent',border:'none',color:TEXT3,cursor:'pointer',borderLeft:`1px solid ${BORDER}`}}>🗑️</button>
                   </div>
                 </>
               )}
@@ -209,10 +224,10 @@ export default function Dashboard() {
         {/* Stats */}
         <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12,marginBottom:28}}>
           {[
-            {label:'Live Now', val:liveShow.length, sub:liveShow.length===1?'1 player in-game':`${liveShow.length} players in-game`},
-            {label:dayLabel(day),   val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(Math.floor(playtime/byDay.length))}`:'—'},
-            {label:'Playtime',      val:fmt(playtime),          sub:'today'},
-            {label:'Total Players', val:players,                sub:'unique'},
+            {label:'Live Now',     val:liveShow.length,          sub:liveShow.length===1?'1 player in-game':`${liveShow.length} players in-game`},
+            {label:dayLabel(day),  val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(Math.floor(playtime/byDay.length))}`:'—'},
+            {label:'Playtime',     val:fmt(playtime),             sub:'today'},
+            {label:'Total Players',val:players,                   sub:'unique'},
           ].map(({label,val,sub})=>(
             <div key={label} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'18px 20px'}}>
               <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:TEXT3,textTransform:'uppercase',marginBottom:10}}>{label}</p>
@@ -239,7 +254,7 @@ export default function Dashboard() {
                   </span>
                   <div style={{flex:1,minWidth:0}}>
                     <p style={{fontWeight:600,fontSize:14,color:TEXT,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.username}</p>
-                    <p style={{fontSize:12,color:TEXT2,marginTop:2}}>{p.game_name}</p>
+                    <p style={{fontSize:12,color:TEXT2,marginTop:2}}>{display(p.game_name)}</p>
                   </div>
                   <p style={{fontSize:13,fontWeight:600,color:GREEN,flexShrink:0,fontVariantNumeric:'tabular-nums'}}>{elapsedSince(p.joined_at,now)}</p>
                 </div>
@@ -297,7 +312,7 @@ export default function Dashboard() {
                     <tr key={s.id} style={{borderBottom:`1px solid ${BORDER}`}}>
                       <td style={{padding:'11px 16px',fontWeight:600,color:TEXT}}>{s.username}</td>
                       <td style={{padding:'11px 16px'}}>
-                        <span style={{padding:'2px 8px',borderRadius:5,background:ELEV,color:TEXT2,fontSize:12,fontWeight:500}}>{s.game_name}</span>
+                        <span style={{padding:'2px 8px',borderRadius:5,background:ELEV,color:TEXT2,fontSize:12,fontWeight:500}}>{display(s.game_name)}</span>
                       </td>
                       <td style={{padding:'11px 16px',color:TEXT,fontVariantNumeric:'tabular-nums'}}>{fmt(s.session_time)}</td>
                       <td style={{padding:'11px 16px',color:TEXT2,fontVariantNumeric:'tabular-nums'}}>{fmt(s.total_time)}</td>
