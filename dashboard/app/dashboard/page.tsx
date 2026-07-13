@@ -4,9 +4,12 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V = 'v2.3'
+const V='v2.4'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
+
+type SortKey = 'when'|'session'|'total'|'player'|'count'
+type SortDir = 'asc'|'desc'
 
 function fmt(s:number){
   s=Math.floor(s);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60
@@ -33,26 +36,25 @@ function buildHourly(sessions:Session[],day:Date){
 export default function Dashboard(){
   const[sessions,setSessions]         =useState<Session[]>([])
   const[live,setLive]                 =useState<LivePlayer[]>([])
-  const[aliases,setAliases]           =useState<Record<string,string>>({}) // raw → display
+  const[aliases,setAliases]           =useState<Record<string,string>>({})
   const[game,setGame]                 =useState('all')
   const[day,setDay]                   =useState(new Date())
   const[search,setSearch]             =useState('')
+  const[sortBy,setSortBy]             =useState<SortKey>('when')
+  const[sortDir,setSortDir]           =useState<SortDir>('desc')
   const[now,setNow]                   =useState(new Date())
   const[loading,setLoading]           =useState(true)
-  const[renamingGame,setRenamingGame] =useState<string|null>(null) // display name being renamed
+  const[renamingGame,setRenamingGame] =useState<string|null>(null)
   const[renameVal,setRenameVal]       =useState('')
   const[saving,setSaving]             =useState(false)
   const renameRef                     =useRef<HTMLInputElement>(null)
 
   useEffect(()=>{const id=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(id)},[])
 
-  // Aliases: raw_name → display_name
   const display=(raw:string)=>aliases[raw]||raw
-
-  // Raw names that currently show under a given display name
-  const rawsFor=(displayName:string):string[]=>{
-    const aliased=Object.entries(aliases).filter(([,v])=>v===displayName).map(([k])=>k)
-    return aliased.length>0?aliased:[displayName]
+  const rawsFor=(dn:string):string[]=>{
+    const a=Object.entries(aliases).filter(([,v])=>v===dn).map(([k])=>k)
+    return a.length>0?a:[dn]
   }
 
   const load=useCallback(async()=>{
@@ -64,11 +66,7 @@ export default function Dashboard(){
     ])
     if(s) setSessions(s)
     if(l) setLive(l)
-    if(a){
-      const map:Record<string,string>={}
-      a.forEach((row:any)=>{map[row.raw_name]=row.display_name})
-      setAliases(map)
-    }
+    if(a){const map:Record<string,string>={};a.forEach((r:any)=>{map[r.raw_name]=r.display_name});setAliases(map)}
     setLoading(false)
   },[])
 
@@ -76,9 +74,7 @@ export default function Dashboard(){
 
   useEffect(()=>{
     const ch=supabase.channel('rt')
-      .on('postgres_changes',{event:'INSERT',schema:'public',table:'sessions'},({new:s})=>{
-        setSessions(p=>[s as Session,...p])
-      })
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'sessions'},({new:s})=>{setSessions(p=>[s as Session,...p])})
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'live_players'},({new:p})=>{
         setLive(prev=>prev.find(x=>x.user_id===(p as LivePlayer).user_id)?prev:[...prev,p as LivePlayer])
       })
@@ -89,42 +85,28 @@ export default function Dashboard(){
     return()=>{supabase.removeChannel(ch)}
   },[])
 
-  // Unique display-name tabs
-  const games=useMemo(()=>{
-    const rawGames=[...new Set(sessions.map(s=>s.game_name))]
-    return[...new Set(rawGames.map(display))].sort()
-  },[sessions,aliases])
+  const games=useMemo(()=>[...new Set(sessions.map(s=>display(s.game_name)))].sort(),[sessions,aliases])
 
   const startRename=(g:string)=>{setRenamingGame(g);setRenameVal(g);setTimeout(()=>renameRef.current?.focus(),50)}
   const cancelRename=()=>setRenamingGame(null)
-
   const commitRename=async()=>{
     if(!renamingGame)return
-    const newName=renameVal.trim()
-    if(!newName||newName===renamingGame){cancelRename();return}
+    const n=renameVal.trim()
+    if(!n||n===renamingGame){cancelRename();return}
     setSaving(true)
-    // Find all raw names currently mapped to this display name
     const raws=rawsFor(renamingGame)
-    // Upsert alias for each raw name
-    await Promise.all(raws.map(raw=>
-      supabase.from('game_aliases').upsert({raw_name:raw,display_name:newName})
-    ))
-    setAliases(prev=>{
-      const next={...prev}
-      raws.forEach(raw=>{next[raw]=newName})
-      return next
-    })
-    if(game===renamingGame)setGame(newName)
+    await Promise.all(raws.map(r=>supabase.from('game_aliases').upsert({raw_name:r,display_name:n})))
+    setAliases(prev=>{const next={...prev};raws.forEach(r=>{next[r]=n});return next})
+    if(game===renamingGame)setGame(n)
     setRenamingGame(null);setSaving(false)
   }
-
   const deleteGame=async(g:string)=>{
     if(!confirm(`Delete all data for "${g}"? This cannot be undone.`))return
     const raws=rawsFor(g)
     await Promise.all([
-      ...raws.map(raw=>supabase.from('sessions').delete().eq('game_name',raw)),
-      ...raws.map(raw=>supabase.from('live_players').delete().eq('game_name',raw)),
-      ...raws.map(raw=>supabase.from('game_aliases').delete().eq('raw_name',raw)),
+      ...raws.map(r=>supabase.from('sessions').delete().eq('game_name',r)),
+      ...raws.map(r=>supabase.from('live_players').delete().eq('game_name',r)),
+      ...raws.map(r=>supabase.from('game_aliases').delete().eq('raw_name',r)),
     ])
     setSessions(p=>p.filter(s=>!raws.includes(s.game_name)))
     setLive(p=>p.filter(x=>!raws.includes(x.game_name)))
@@ -132,14 +114,34 @@ export default function Dashboard(){
     if(game===g)setGame('all')
   }
 
-  const byGame   =useMemo(()=>sessions.filter(s=>game==='all'||display(s.game_name)===game),[sessions,game,aliases])
-  const bySearch =useMemo(()=>byGame.filter(s=>!search||s.username.toLowerCase().includes(search.toLowerCase())),[byGame,search])
-  const byDay    =useMemo(()=>byGame.filter(s=>sameDay(new Date(s.created_at),day)),[byGame,day])
-  const liveShow =useMemo(()=>live.filter(p=>game==='all'||display(p.game_name)===game),[live,game,aliases])
-  const playtime =useMemo(()=>byDay.reduce((a,s)=>a+s.session_time,0),[byDay])
-  const players  =useMemo(()=>new Set(byGame.map(s=>s.username)).size,[byGame])
-  const hourly   =useMemo(()=>buildHourly(byGame,day),[byGame,day])
-  const isToday  =sameDay(day,new Date())
+  // Sort toggle
+  const toggleSort=(key:SortKey)=>{
+    if(sortBy===key)setSortDir(d=>d==='desc'?'asc':'desc')
+    else{setSortBy(key);setSortDir('desc')}
+  }
+  const sortIcon=(key:SortKey)=>sortBy===key?(sortDir==='desc'?'↓':'↑'):'↕'
+
+  const isToday   =sameDay(day,new Date())
+  const byGame    =useMemo(()=>sessions.filter(s=>game==='all'||display(s.game_name)===game),[sessions,game,aliases])
+  const byDay     =useMemo(()=>byGame.filter(s=>sameDay(new Date(s.created_at),day)),[byGame,day])
+  const liveShow  =useMemo(()=>live.filter(p=>game==='all'||display(p.game_name)===game),[live,game,aliases])
+  const playtime  =useMemo(()=>byDay.reduce((a,s)=>a+s.session_time,0),[byDay])
+  const players   =useMemo(()=>new Set(byGame.map(s=>s.username)).size,[byGame])
+  const hourly    =useMemo(()=>buildHourly(byGame,day),[byGame,day])
+  const avgSession=byDay.length>0?Math.floor(playtime/byDay.length):0
+
+  const sorted=useMemo(()=>{
+    const filtered=byGame.filter(s=>!search||s.username.toLowerCase().includes(search.toLowerCase()))
+    return[...filtered].sort((a,b)=>{
+      let diff=0
+      if(sortBy==='session') diff=a.session_time-b.session_time
+      else if(sortBy==='total') diff=a.total_time-b.total_time
+      else if(sortBy==='player') diff=a.username.localeCompare(b.username)
+      else if(sortBy==='count') diff=a.session_count-b.session_count
+      else diff=new Date(a.created_at).getTime()-new Date(b.created_at).getTime()
+      return sortDir==='desc'?-diff:diff
+    })
+  },[byGame,search,sortBy,sortDir])
 
   const ChartTip=({active,payload,label}:any)=>{
     if(!active||!payload?.length)return null
@@ -148,6 +150,14 @@ export default function Dashboard(){
       <p style={{fontSize:15,fontWeight:700,color:ACCENT}}>{payload[0].value}</p>
     </div>
   }
+
+  // Column header button
+  const ColHeader=({label,sortKey,align='left'}:{label:string;sortKey?:SortKey;align?:string})=>(
+    <th style={{padding:'11px 16px',textAlign:align as any,fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:sortKey&&sortBy===sortKey?ACCENT:TEXT3,textTransform:'uppercase',whiteSpace:'nowrap',userSelect:'none',cursor:sortKey?'pointer':'default'}}
+      onClick={()=>sortKey&&toggleSort(sortKey)}>
+      {label}{sortKey&&<span style={{marginLeft:4,opacity:0.6}}>{sortIcon(sortKey)}</span>}
+    </th>
+  )
 
   if(loading)return(
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:BG}}>
@@ -224,10 +234,12 @@ export default function Dashboard(){
         {/* Stats */}
         <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12,marginBottom:28}}>
           {[
-            {label:'Live Now',     val:liveShow.length,          sub:liveShow.length===1?'1 player in-game':`${liveShow.length} players in-game`},
-            {label:dayLabel(day),  val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(Math.floor(playtime/byDay.length))}`:'—'},
-            {label:'Playtime',     val:fmt(playtime),             sub:'today'},
-            {label:'Total Players',val:players,                   sub:'unique'},
+            isToday
+              ? {label:'Live Now',    val:liveShow.length,          sub:liveShow.length===1?'1 player in-game':`${liveShow.length} players in-game`}
+              : {label:'Avg Session', val:fmt(avgSession),           sub:`across ${byDay.length} sessions`},
+            {label:dayLabel(day),     val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(avgSession)}`:'—'},
+            {label:'Playtime',        val:fmt(playtime),             sub:dayLabel(day).toLowerCase()},
+            {label:'Total Players',   val:players,                   sub:'unique (last 30 days)'},
           ].map(({label,val,sub})=>(
             <div key={label} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'18px 20px'}}>
               <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:TEXT3,textTransform:'uppercase',marginBottom:10}}>{label}</p>
@@ -237,31 +249,33 @@ export default function Dashboard(){
           ))}
         </div>
 
-        {/* Live Now */}
-        <div style={{marginBottom:28}}>
-          <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase',marginBottom:12}}>Live Now</p>
-          {liveShow.length===0?(
-            <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:28,textAlign:'center'}}>
-              <p style={{color:TEXT3,fontSize:13}}>No players in-game</p>
-            </div>
-          ):(
-            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(250px,1fr))',gap:8}}>
-              {liveShow.map(p=>(
-                <div key={p.user_id} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
-                  <span style={{position:'relative',display:'inline-flex',width:8,height:8,flexShrink:0}}>
-                    <span style={{position:'absolute',inset:0,borderRadius:'50%',background:GREEN,opacity:0.4,animation:'ping 1.5s infinite'}}/>
-                    <span style={{width:8,height:8,borderRadius:'50%',background:GREEN,display:'block'}}/>
-                  </span>
-                  <div style={{flex:1,minWidth:0}}>
-                    <p style={{fontWeight:600,fontSize:14,color:TEXT,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.username}</p>
-                    <p style={{fontSize:12,color:TEXT2,marginTop:2}}>{display(p.game_name)}</p>
+        {/* Live Now — today only */}
+        {isToday&&(
+          <div style={{marginBottom:28}}>
+            <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase',marginBottom:12}}>Live Now</p>
+            {liveShow.length===0?(
+              <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:28,textAlign:'center'}}>
+                <p style={{color:TEXT3,fontSize:13}}>No players in-game</p>
+              </div>
+            ):(
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(250px,1fr))',gap:8}}>
+                {liveShow.map(p=>(
+                  <div key={p.user_id} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'12px 16px',display:'flex',alignItems:'center',gap:12}}>
+                    <span style={{position:'relative',display:'inline-flex',width:8,height:8,flexShrink:0}}>
+                      <span style={{position:'absolute',inset:0,borderRadius:'50%',background:GREEN,opacity:0.4,animation:'ping 1.5s infinite'}}/>
+                      <span style={{width:8,height:8,borderRadius:'50%',background:GREEN,display:'block'}}/>
+                    </span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{fontWeight:600,fontSize:14,color:TEXT,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.username}</p>
+                      <p style={{fontSize:12,color:TEXT2,marginTop:2}}>{display(p.game_name)}</p>
+                    </div>
+                    <p style={{fontSize:13,fontWeight:600,color:GREEN,flexShrink:0,fontVariantNumeric:'tabular-nums'}}>{elapsedSince(p.joined_at,now)}</p>
                   </div>
-                  <p style={{fontSize:13,fontWeight:600,color:GREEN,flexShrink:0,fontVariantNumeric:'tabular-nums'}}>{elapsedSince(p.joined_at,now)}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Chart */}
         <div style={{marginBottom:28}}>
@@ -298,17 +312,20 @@ export default function Dashboard(){
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
                 <thead>
                   <tr style={{borderBottom:`1px solid ${BORDER}`}}>
-                    {['Player','Game','Session','Total','#','When'].map((h,i)=>(
-                      <th key={h} style={{padding:'11px 16px',textAlign:i===5?'right':'left',fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:TEXT3,textTransform:'uppercase'}}>{h}</th>
-                    ))}
+                    <ColHeader label="Player"  sortKey="player" />
+                    <ColHeader label="Game" />
+                    <ColHeader label="Session" sortKey="session" />
+                    <ColHeader label="Total"   sortKey="total" />
+                    <ColHeader label="#"        sortKey="count" />
+                    <ColHeader label="When"    sortKey="when"  align="right" />
                   </tr>
                 </thead>
                 <tbody>
-                  {bySearch.length===0?(
+                  {sorted.length===0?(
                     <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3,fontSize:13}}>
                       {search?`No results for "${search}"`:'No sessions yet'}
                     </td></tr>
-                  ):bySearch.slice(0,100).map(s=>(
+                  ):sorted.slice(0,100).map(s=>(
                     <tr key={s.id} style={{borderBottom:`1px solid ${BORDER}`}}>
                       <td style={{padding:'11px 16px',fontWeight:600,color:TEXT}}>{s.username}</td>
                       <td style={{padding:'11px 16px'}}>
@@ -323,9 +340,9 @@ export default function Dashboard(){
                 </tbody>
               </table>
             </div>
-            {bySearch.length>100&&(
+            {sorted.length>100&&(
               <div style={{padding:12,textAlign:'center',borderTop:`1px solid ${BORDER}`}}>
-                <p style={{fontSize:12,color:TEXT3}}>Showing 100 of {bySearch.length}</p>
+                <p style={{fontSize:12,color:TEXT3}}>Showing 100 of {sorted.length}</p>
               </div>
             )}
           </div>
