@@ -4,13 +4,24 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v2.9'
+const V='v3.0'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 const TZ='America/New_York' // EST/EDT — all date comparisons use this
 
 type SortKey = 'when'|'session'|'total'|'player'|'count'
 type SortDir = 'asc'|'desc'
+type View    = 'sessions'|'players'
+type PSortKey= 'name'|'total'|'sessions'|'avg'|'last'
+
+type PlayerRow = {
+  username: string
+  totalTime: number
+  sessions: number
+  avg: number
+  last: string
+  games: string[]
+}
 
 function fmt(s:number){
   s=Math.floor(s);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60
@@ -51,6 +62,9 @@ export default function Dashboard(){
   const[search,setSearch]             =useState('')
   const[sortBy,setSortBy]             =useState<SortKey>('when')
   const[sortDir,setSortDir]           =useState<SortDir>('desc')
+  const[view,setView]                 =useState<View>('sessions')
+  const[pSortBy,setPSortBy]           =useState<PSortKey>('total')
+  const[pSortDir,setPSortDir]         =useState<SortDir>('desc')
   const[now,setNow]                   =useState(new Date())
   const[loading,setLoading]           =useState(true)
   const[renamingGame,setRenamingGame] =useState<string|null>(null)
@@ -153,7 +167,7 @@ export default function Dashboard(){
   const byDay     =useMemo(()=>byGame.filter(s=>sameDay(new Date(s.created_at),day)),[byGame,day])
   const liveShow  =useMemo(()=>live.filter(p=>game==='all'||display(p.game_name)===game),[live,game,aliases])
   const playtime  =useMemo(()=>byDay.reduce((a,s)=>a+s.session_time,0),[byDay])
-  const players   =useMemo(()=>new Set(byGame.map(s=>s.username)).size,[byGame])
+  const players   =useMemo(()=>new Set(byDay.map(s=>s.username)).size,[byDay])
   const hourly    =useMemo(()=>buildHourly(byGame,day),[byGame,day])
   const avgSession=byDay.length>0?Math.floor(playtime/byDay.length):0
 
@@ -169,6 +183,55 @@ export default function Dashboard(){
       return sortDir==='desc'?-diff:diff
     })
   },[byDay,search,sortBy,sortDir])
+
+  // ── Player leaderboard (all-time within loaded window, respects game filter) ──
+  const playerRows=useMemo(():PlayerRow[]=>{
+    const map=new Map<string,PlayerRow>()
+    for(const s of byGame){
+      const key=s.username.toLowerCase()
+      const ex=map.get(key)
+      if(ex){
+        ex.totalTime+=s.session_time
+        ex.sessions+=1
+        if(new Date(s.created_at)>new Date(ex.last))ex.last=s.created_at
+        const g=display(s.game_name)
+        if(!ex.games.includes(g))ex.games.push(g)
+      }else{
+        map.set(key,{
+          username:s.username,
+          totalTime:s.session_time,
+          sessions:1,
+          avg:0,
+          last:s.created_at,
+          games:[display(s.game_name)],
+        })
+      }
+    }
+    const rows=[...map.values()]
+    rows.forEach(r=>{r.avg=Math.floor(r.totalTime/r.sessions)})
+    return rows
+  },[byGame,aliases])
+
+  const playerSorted=useMemo(()=>{
+    const filtered=playerRows.filter(r=>!search||r.username.toLowerCase().includes(search.toLowerCase()))
+    return[...filtered].sort((a,b)=>{
+      let diff=0
+      if(pSortBy==='name')          diff=a.username.localeCompare(b.username)
+      else if(pSortBy==='sessions') diff=a.sessions-b.sessions
+      else if(pSortBy==='avg')      diff=a.avg-b.avg
+      else if(pSortBy==='last')     diff=new Date(a.last).getTime()-new Date(b.last).getTime()
+      else                          diff=a.totalTime-b.totalTime
+      return pSortDir==='desc'?-diff:diff
+    })
+  },[playerRows,search,pSortBy,pSortDir])
+
+  const togglePSort=(k:PSortKey)=>{
+    if(pSortBy===k)setPSortDir(d=>d==='desc'?'asc':'desc')
+    else{setPSortBy(k);setPSortDir('desc')}
+  }
+  const pSortIcon=(k:PSortKey)=>pSortBy===k?(pSortDir==='desc'?'↓':'↑'):'↕'
+
+  const medal=(i:number)=>i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}`
 
   const ChartTip=({active,payload,label}:any)=>{
     if(!active||!payload?.length)return null
@@ -266,7 +329,7 @@ export default function Dashboard(){
               : {label:'Avg Session', val:fmt(avgSession),           sub:`across ${byDay.length} sessions`},
             {label:dayLabel(day),     val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(avgSession)}`:'—'},
             {label:'Combined Playtime', val:fmt(playtime), sub:`${byDay.length} sessions ${dayLabel(day).toLowerCase()}`},
-            {label:'Total Players',   val:players,                   sub:'unique (last 30 days)'},
+            {label:'Players',         val:players,                   sub:`unique ${dayLabel(day).toLowerCase()}`},
           ].map(({label,val,sub})=>(
             <div key={label} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'18px 20px'}}>
               <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:TEXT3,textTransform:'uppercase',marginBottom:10}}>{label}</p>
@@ -327,49 +390,117 @@ export default function Dashboard(){
           </div>
         </div>
 
-        {/* Table */}
+        {/* View Tabs + Table */}
         <div>
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,flexWrap:'wrap',gap:8}}>
-            <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase'}}>Session History — {dayLabel(day)}</p>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12,flexWrap:'wrap',gap:10}}>
+            {/* Sessions / Players toggle */}
+            <div style={{display:'flex',borderRadius:9,overflow:'hidden',border:`1px solid ${BORDER}`}}>
+              {(['sessions','players'] as View[]).map(v=>(
+                <button key={v} onClick={()=>setView(v)}
+                  style={{padding:'7px 18px',fontSize:13,fontWeight:view===v?600:500,textTransform:'capitalize',
+                    background:view===v?ELEV:SURFACE,color:view===v?TEXT:TEXT2,border:'none',cursor:'pointer'}}>
+                  {v==='sessions'?'Sessions':'Players'}
+                </button>
+              ))}
+            </div>
             <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search player…"
               style={{padding:'7px 14px',borderRadius:8,background:SURFACE,border:`1px solid ${BORDER}`,color:TEXT,fontSize:13,width:180,outline:'none'}}/>
           </div>
+
+          <p style={{fontSize:11,fontWeight:700,letterSpacing:'0.08em',color:TEXT3,textTransform:'uppercase',marginBottom:12}}>
+            {view==='sessions'
+              ? `Session History — ${dayLabel(day)}`
+              : `Player Leaderboard — ${game==='all'?'All Games':game}`}
+          </p>
+
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
             <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-                <thead>
-                  <tr style={{borderBottom:`1px solid ${BORDER}`}}>
-                    <ColHeader label="Player"  sortKey="player" />
-                    <ColHeader label="Game" />
-                    <ColHeader label="Session" sortKey="session" />
-                    <ColHeader label="Total"   sortKey="total" />
-                    <ColHeader label="#"        sortKey="count" />
-                    <ColHeader label="When"    sortKey="when"  align="right" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.length===0?(
-                    <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3,fontSize:13}}>
-                      {search?`No results for "${search}"`:`No sessions on ${dayLabel(day).toLowerCase()}`}
-                    </td></tr>
-                  ):sorted.slice(0,100).map(s=>(
-                    <tr key={s.id} style={{borderBottom:`1px solid ${BORDER}`}}>
-                      <td style={{padding:'11px 16px',fontWeight:600,color:TEXT}}>{s.username}</td>
-                      <td style={{padding:'11px 16px'}}>
-                        <span style={{padding:'2px 8px',borderRadius:5,background:ELEV,color:TEXT2,fontSize:12,fontWeight:500}}>{display(s.game_name)}</span>
-                      </td>
-                      <td style={{padding:'11px 16px',color:TEXT,fontVariantNumeric:'tabular-nums'}}>{fmt(s.session_time)}</td>
-                      <td style={{padding:'11px 16px',color:TEXT2,fontVariantNumeric:'tabular-nums'}}>{fmt(s.total_time)}</td>
-                      <td style={{padding:'11px 16px',color:TEXT3}}>#{s.session_count}</td>
-                      <td style={{padding:'11px 16px',color:TEXT3,textAlign:'right'}}>{timeAgo(s.created_at)}</td>
+
+              {view==='sessions'?(
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                  <thead>
+                    <tr style={{borderBottom:`1px solid ${BORDER}`}}>
+                      <ColHeader label="Player"  sortKey="player" />
+                      <ColHeader label="Game" />
+                      <ColHeader label="Session" sortKey="session" />
+                      <ColHeader label="Total"   sortKey="total" />
+                      <ColHeader label="#"       sortKey="count" />
+                      <ColHeader label="When"    sortKey="when"  align="right" />
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {sorted.length===0?(
+                      <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3,fontSize:13}}>
+                        {search?`No results for "${search}"`:`No sessions on ${dayLabel(day).toLowerCase()}`}
+                      </td></tr>
+                    ):sorted.slice(0,100).map(s=>(
+                      <tr key={s.id} style={{borderBottom:`1px solid ${BORDER}`}}>
+                        <td style={{padding:'11px 16px',fontWeight:600,color:TEXT}}>{s.username}</td>
+                        <td style={{padding:'11px 16px'}}>
+                          <span style={{padding:'2px 8px',borderRadius:5,background:ELEV,color:TEXT2,fontSize:12,fontWeight:500}}>{display(s.game_name)}</span>
+                        </td>
+                        <td style={{padding:'11px 16px',color:TEXT,fontVariantNumeric:'tabular-nums'}}>{fmt(s.session_time)}</td>
+                        <td style={{padding:'11px 16px',color:TEXT2,fontVariantNumeric:'tabular-nums'}}>{fmt(s.total_time)}</td>
+                        <td style={{padding:'11px 16px',color:TEXT3}}>#{s.session_count}</td>
+                        <td style={{padding:'11px 16px',color:TEXT3,textAlign:'right'}}>{timeAgo(s.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ):(
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                  <thead>
+                    <tr style={{borderBottom:`1px solid ${BORDER}`}}>
+                      <th style={{padding:'11px 16px',textAlign:'center',fontSize:11,fontWeight:700,letterSpacing:'0.07em',color:TEXT3,width:52}}>#</th>
+                      {([
+                        {l:'Player',    k:'name'     as PSortKey, a:'left'},
+                        {l:'Playtime',  k:'total'    as PSortKey, a:'left'},
+                        {l:'Sessions',  k:'sessions' as PSortKey, a:'left'},
+                        {l:'Avg',       k:'avg'      as PSortKey, a:'left'},
+                        {l:'Last Seen', k:'last'     as PSortKey, a:'right'},
+                      ]).map(({l,k,a})=>(
+                        <th key={l} onClick={()=>togglePSort(k)}
+                          style={{padding:'11px 16px',textAlign:a as any,fontSize:11,fontWeight:700,letterSpacing:'0.07em',
+                            color:pSortBy===k?ACCENT:TEXT3,textTransform:'uppercase',whiteSpace:'nowrap',cursor:'pointer',userSelect:'none'}}>
+                          {l}<span style={{marginLeft:4,opacity:0.6}}>{pSortIcon(k)}</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {playerSorted.length===0?(
+                      <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3,fontSize:13}}>
+                        {search?`No results for "${search}"`:'No players yet'}
+                      </td></tr>
+                    ):playerSorted.slice(0,100).map((r,i)=>{
+                      const isTop3 = pSortBy==='total' && pSortDir==='desc' && i<3
+                      return(
+                        <tr key={r.username} style={{borderBottom:`1px solid ${BORDER}`}}>
+                          <td style={{padding:'11px 16px',textAlign:'center',fontSize:isTop3?16:12,color:TEXT3,fontWeight:600}}>
+                            {pSortBy==='total'&&pSortDir==='desc'?medal(i):i+1}
+                          </td>
+                          <td style={{padding:'11px 16px',fontWeight:600,color:TEXT}}>{r.username}</td>
+                          <td style={{padding:'11px 16px',color:TEXT,fontWeight:600,fontVariantNumeric:'tabular-nums'}}>{fmt(r.totalTime)}</td>
+                          <td style={{padding:'11px 16px',color:TEXT2,fontVariantNumeric:'tabular-nums'}}>{r.sessions}</td>
+                          <td style={{padding:'11px 16px',color:TEXT2,fontVariantNumeric:'tabular-nums'}}>{fmt(r.avg)}</td>
+                          <td style={{padding:'11px 16px',color:TEXT3,textAlign:'right'}}>{timeAgo(r.last)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+
             </div>
-            {sorted.length>100&&(
+
+            {view==='sessions'&&sorted.length>100&&(
               <div style={{padding:12,textAlign:'center',borderTop:`1px solid ${BORDER}`}}>
                 <p style={{fontSize:12,color:TEXT3}}>Showing 100 of {sorted.length}</p>
+              </div>
+            )}
+            {view==='players'&&playerSorted.length>100&&(
+              <div style={{padding:12,textAlign:'center',borderTop:`1px solid ${BORDER}`}}>
+                <p style={{fontSize:12,color:TEXT3}}>Showing 100 of {playerSorted.length} players</p>
               </div>
             )}
           </div>
