@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v2.8'
+const V='v2.9'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 const TZ='America/New_York' // EST/EDT — all date comparisons use this
@@ -265,7 +265,7 @@ export default function Dashboard(){
               ? {label:'Live Now',    val:liveShow.length,          sub:liveShow.length===1?'1 player in-game':`${liveShow.length} players in-game`}
               : {label:'Avg Session', val:fmt(avgSession),           sub:`across ${byDay.length} sessions`},
             {label:dayLabel(day),     val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(avgSession)}`:'—'},
-            {label:'Combined Playtime', val:fmt(playtime), sub:`${byDay.length} players' sessions`},
+            {label:'Combined Playtime', val:fmt(playtime), sub:`${byDay.length} sessions ${dayLabel(day).toLowerCase()}`},
             {label:'Total Players',   val:players,                   sub:'unique (last 30 days)'},
           ].map(({label,val,sub})=>(
             <div key={label} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'18px 20px'}}>
