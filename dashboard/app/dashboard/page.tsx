@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v2.4'
+const V='v2.5'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 
@@ -21,7 +21,8 @@ function timeAgo(d:string){
   if(s<60)return`${s}s ago`;if(s<3600)return`${Math.floor(s/60)}m ago`
   if(s<86400)return`${Math.floor(s/3600)}h ago`;return new Date(d).toLocaleDateString()
 }
-function sameDay(a:Date,b:Date){return a.toDateString()===b.toDateString()}
+function toYMD(d:Date){return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`}
+function sameDay(a:Date,b:Date){return toYMD(a)===toYMD(b)}
 function dayLabel(d:Date){
   const t=new Date(),y=new Date();y.setDate(t.getDate()-1)
   if(sameDay(d,t))return'Today';if(sameDay(d,y))return'Yesterday'
@@ -238,7 +239,7 @@ export default function Dashboard(){
               ? {label:'Live Now',    val:liveShow.length,          sub:liveShow.length===1?'1 player in-game':`${liveShow.length} players in-game`}
               : {label:'Avg Session', val:fmt(avgSession),           sub:`across ${byDay.length} sessions`},
             {label:dayLabel(day),     val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(avgSession)}`:'—'},
-            {label:'Playtime',        val:fmt(playtime),             sub:dayLabel(day).toLowerCase()},
+            {label:'Combined Playtime', val:fmt(playtime), sub:`${byDay.length} players' sessions`},
             {label:'Total Players',   val:players,                   sub:'unique (last 30 days)'},
           ].map(({label,val,sub})=>(
             <div key={label} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'18px 20px'}}>
