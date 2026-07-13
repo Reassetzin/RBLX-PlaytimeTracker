@@ -209,7 +209,7 @@ export default function Dashboard() {
         {/* Stats */}
         <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12,marginBottom:28}}>
           {[
-            {label:'Live Now',      val:liveShow.length,      sub:`${liveShow.length===1?'1 player':'${liveShow.length} players'} in-game`},
+            {label:'Live Now', val:liveShow.length, sub:liveShow.length===1?'1 player in-game':`${liveShow.length} players in-game`},
             {label:dayLabel(day),   val:`${byDay.length} sessions`, sub:byDay.length>0?`avg ${fmt(Math.floor(playtime/byDay.length))}`:'—'},
             {label:'Playtime',      val:fmt(playtime),          sub:'today'},
             {label:'Total Players', val:players,                sub:'unique'},
