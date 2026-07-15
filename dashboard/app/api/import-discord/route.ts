@@ -159,12 +159,16 @@ export async function GET(req: Request) {
   if (!dry) {
     for (let i = 0; i < rows.length; i += 25) {
       const batch = rows.slice(i, i + 25)
+      // upsert with ignoreDuplicates — the DB unique constraint makes re-imports safe
       const { error, data } = await supabase
         .from('sessions')
-        .insert(batch)
-        .select('created_at')
+        .upsert(batch, {
+          onConflict: 'username,game_name,session_count,created_at',
+          ignoreDuplicates: true,
+        })
+        .select('id')
       if (!error) {
-        inserted += batch.length
+        inserted += data?.length ?? 0
       } else {
         errors++
         if (errorSamples.length < 3) errorSamples.push(error.message)
