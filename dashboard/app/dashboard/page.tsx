@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v3.1'
+const V='v3.2'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 const TZ='America/New_York' // EST/EDT — all date comparisons use this
@@ -67,10 +67,16 @@ export default function Dashboard(){
   const[pSortDir,setPSortDir]         =useState<SortDir>('desc')
   const[now,setNow]                   =useState(new Date())
   const[loading,setLoading]           =useState(true)
+  const[dayLoading,setDayLoading]     =useState(true)
+  const[lbLoading,setLbLoading]       =useState(false)
+  const[rawGames,setRawGames]         =useState<string[]>([])
+  const[lbRows,setLbRows]             =useState<PlayerRow[]>([])
   const[renamingGame,setRenamingGame] =useState<string|null>(null)
   const[renameVal,setRenameVal]       =useState('')
   const[saving,setSaving]             =useState(false)
   const renameRef                     =useRef<HTMLInputElement>(null)
+  const dayRef                        =useRef(day)
+  useEffect(()=>{dayRef.current=day},[day])
 
   useEffect(()=>{const id=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(id)},[])
 
@@ -80,15 +86,19 @@ export default function Dashboard(){
     return a.length>0?a:[dn]
   }
 
-  // Supabase caps responses at 1000 rows — paginate with .range() to get everything
-  const fetchAllSessions=async(sinceISO:string):Promise<Session[]>=>{
-    const PAGE=1000
+  // Fetch only the selected day's sessions (EST day boundaries -> UTC range)
+  const fetchDaySessions=async(d:Date):Promise<Session[]>=>{
+    // Build EST midnight-to-midnight window
+    const ymd=toESTDay(d)
+    const start=new Date(`${ymd}T00:00:00-05:00`)
+    const end=new Date(start.getTime()+24*60*60*1000)
     const all:Session[]=[]
-    for(let from=0;from<20000;from+=PAGE){
+    const PAGE=1000
+    for(let from=0;from<10000;from+=PAGE){
       const{data,error}=await supabase
-        .from('sessions')
-        .select('*')
-        .gte('created_at',sinceISO)
+        .from('sessions').select('*')
+        .gte('created_at',start.toISOString())
+        .lt('created_at',end.toISOString())
         .order('created_at',{ascending:false})
         .range(from,from+PAGE-1)
       if(error||!data||data.length===0)break
@@ -98,24 +108,38 @@ export default function Dashboard(){
     return all
   }
 
+  // Initial load: live players, aliases, game list (all tiny)
   const load=useCallback(async()=>{
-    const cut=new Date();cut.setDate(cut.getDate()-30)
-    const[s,{data:l},{data:a}]=await Promise.all([
-      fetchAllSessions(cut.toISOString()),
+    const[{data:l},{data:a},{data:g}]=await Promise.all([
       supabase.from('live_players').select('*').order('joined_at'),
       supabase.from('game_aliases').select('*'),
+      supabase.rpc('get_distinct_games'),
     ])
-    if(s) setSessions(s)
     if(l) setLive(l)
     if(a){const map:Record<string,string>={};a.forEach((r:any)=>{map[r.raw_name]=r.display_name});setAliases(map)}
+    if(g) setRawGames(g.map((r:any)=>r.game_name))
     setLoading(false)
   },[])
 
   useEffect(()=>{load()},[load])
 
+  // Re-fetch sessions whenever the selected day changes
+  useEffect(()=>{
+    let cancelled=false
+    setDayLoading(true)
+    fetchDaySessions(day).then(rows=>{
+      if(!cancelled){setSessions(rows);setDayLoading(false)}
+    })
+    return()=>{cancelled=true}
+  },[day])
+
   useEffect(()=>{
     const ch=supabase.channel('rt')
-      .on('postgres_changes',{event:'INSERT',schema:'public',table:'sessions'},({new:s})=>{setSessions(p=>[s as Session,...p])})
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'sessions'},({new:s})=>{
+        const row=s as Session
+        setSessions(p=>sameDay(new Date(row.created_at),dayRef.current)?[row,...p]:p)
+        setRawGames(p=>p.includes(row.game_name)?p:[...p,row.game_name])
+      })
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'live_players'},({new:p})=>{
         setLive(prev=>prev.find(x=>x.user_id===(p as LivePlayer).user_id)?prev:[...prev,p as LivePlayer])
       })
@@ -126,7 +150,7 @@ export default function Dashboard(){
     return()=>{supabase.removeChannel(ch)}
   },[])
 
-  const games=useMemo(()=>[...new Set(sessions.map(s=>display(s.game_name)))].sort(),[sessions,aliases])
+  const games=useMemo(()=>[...new Set(rawGames.map(display))].sort(),[rawGames,aliases])
 
   const startRename=(g:string)=>{setRenamingGame(g);setRenameVal(g);setTimeout(()=>renameRef.current?.focus(),50)}
   const cancelRename=()=>setRenamingGame(null)
@@ -164,7 +188,7 @@ export default function Dashboard(){
 
   const isToday   =sameDay(day,new Date())
   const byGame    =useMemo(()=>sessions.filter(s=>game==='all'||display(s.game_name)===game),[sessions,game,aliases])
-  const byDay     =useMemo(()=>byGame.filter(s=>sameDay(new Date(s.created_at),day)),[byGame,day])
+  const byDay     =byGame // sessions are already scoped to the selected day
   const liveShow  =useMemo(()=>live.filter(p=>game==='all'||display(p.game_name)===game),[live,game,aliases])
   const playtime  =useMemo(()=>byDay.reduce((a,s)=>a+s.session_time,0),[byDay])
   const players   =useMemo(()=>new Set(byDay.map(s=>s.username)).size,[byDay])
@@ -184,36 +208,29 @@ export default function Dashboard(){
     })
   },[byDay,search,sortBy,sortDir])
 
-  // ── Player leaderboard (all-time within loaded window, respects game filter) ──
-  const playerRows=useMemo(():PlayerRow[]=>{
-    const map=new Map<string,PlayerRow>()
-    for(const s of byGame){
-      const key=s.username.toLowerCase()
-      const ex=map.get(key)
-      if(ex){
-        ex.totalTime+=s.session_time
-        ex.sessions+=1
-        if(new Date(s.created_at)>new Date(ex.last))ex.last=s.created_at
-        const g=display(s.game_name)
-        if(!ex.games.includes(g))ex.games.push(g)
-      }else{
-        map.set(key,{
-          username:s.username,
-          totalTime:s.session_time,
-          sessions:1,
-          avg:0,
-          last:s.created_at,
-          games:[display(s.game_name)],
-        })
-      }
-    }
-    const rows=[...map.values()]
-    rows.forEach(r=>{r.avg=Math.floor(r.totalTime/r.sessions)})
-    return rows
-  },[byGame,aliases])
+  // ── Player leaderboard — aggregated server-side via RPC ──────────────────
+  useEffect(()=>{
+    if(view!=='players')return
+    let cancelled=false
+    setLbLoading(true)
+    const p_games = game==='all' ? null : rawsFor(game)
+    supabase.rpc('get_player_leaderboard',{p_games,p_days:30}).then(({data})=>{
+      if(cancelled)return
+      setLbRows((data||[]).map((r:any)=>({
+        username:r.username,
+        totalTime:Number(r.total_time),
+        sessions:Number(r.sessions),
+        avg:Number(r.avg_time),
+        last:r.last_seen,
+        games:[],
+      })))
+      setLbLoading(false)
+    })
+    return()=>{cancelled=true}
+  },[view,game,aliases])
 
   const playerSorted=useMemo(()=>{
-    const filtered=playerRows.filter(r=>!search||r.username.toLowerCase().includes(search.toLowerCase()))
+    const filtered=lbRows.filter(r=>!search||r.username.toLowerCase().includes(search.toLowerCase()))
     return[...filtered].sort((a,b)=>{
       let diff=0
       if(pSortBy==='name')          diff=a.username.localeCompare(b.username)
@@ -223,7 +240,7 @@ export default function Dashboard(){
       else                          diff=a.totalTime-b.totalTime
       return pSortDir==='desc'?-diff:diff
     })
-  },[playerRows,search,pSortBy,pSortDir])
+  },[lbRows,search,pSortBy,pSortDir])
 
   const togglePSort=(k:PSortKey)=>{
     if(pSortBy===k)setPSortDir(d=>d==='desc'?'asc':'desc')
@@ -387,7 +404,7 @@ export default function Dashboard(){
           ].map(({label,val,sub})=>(
             <div key={label} className="stat-card">
               <p className="stat-label">{label}</p>
-              <p className="stat-val">{val}</p>
+              <p className="stat-val">{dayLoading?'—':val}</p>
               <p className="stat-sub">{sub}</p>
             </div>
           ))}
@@ -425,7 +442,11 @@ export default function Dashboard(){
         <div style={{marginBottom:28}}>
           <p className="sec">Sessions by Hour — {dayLabel(day)}</p>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:'16px 12px 8px'}}>
-            {byDay.length===0?(
+            {dayLoading?(
+              <div style={{height:120,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                <p style={{color:TEXT3,fontSize:13}}>Loading…</p>
+              </div>
+            ):byDay.length===0?(
               <div style={{height:120,display:'flex',alignItems:'center',justifyContent:'center'}}>
                 <p style={{color:TEXT3,fontSize:13}}>No sessions on this day</p>
               </div>
@@ -464,7 +485,7 @@ export default function Dashboard(){
           <p className="sec">
             {view==='sessions'
               ? `Sessions — ${dayLabel(day)}`
-              : `Leaderboard — ${game==='all'?'All Games':game}`}
+              : `Leaderboard — ${game==='all'?'All Games':game} · last 30 days`}
           </p>
 
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
@@ -483,7 +504,9 @@ export default function Dashboard(){
                     </tr>
                   </thead>
                   <tbody>
-                    {sorted.length===0?(
+                    {dayLoading?(
+                      <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3}}>Loading…</td></tr>
+                    ):sorted.length===0?(
                       <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3}}>
                         {search?`No results for "${search}"`:`No sessions on ${dayLabel(day).toLowerCase()}`}
                       </td></tr>
@@ -521,7 +544,9 @@ export default function Dashboard(){
                     </tr>
                   </thead>
                   <tbody>
-                    {playerSorted.length===0?(
+                    {lbLoading?(
+                      <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3}}>Loading…</td></tr>
+                    ):playerSorted.length===0?(
                       <tr><td colSpan={6} style={{padding:40,textAlign:'center',color:TEXT3}}>
                         {search?`No results for "${search}"`:'No players yet'}
                       </td></tr>
