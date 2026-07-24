@@ -4,10 +4,11 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v3.2'
+const V='v3.3'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 const TZ='America/New_York' // EST/EDT — all date comparisons use this
+const STALE_HOURS=3 // live entries older than this are treated as ghosts
 
 type SortKey = 'when'|'session'|'total'|'player'|'count'
 type SortDir = 'asc'|'desc'
@@ -111,7 +112,7 @@ export default function Dashboard(){
   // Initial load: live players, aliases, game list (all tiny)
   const load=useCallback(async()=>{
     const[{data:l},{data:a},{data:g}]=await Promise.all([
-      supabase.from('live_players').select('*').order('joined_at'),
+      supabase.from('live_players').select('*').gte('joined_at',new Date(Date.now()-STALE_HOURS*3600*1000).toISOString()).order('joined_at'),
       supabase.from('game_aliases').select('*'),
       supabase.rpc('get_distinct_games'),
     ])
@@ -189,7 +190,12 @@ export default function Dashboard(){
   const isToday   =sameDay(day,new Date())
   const byGame    =useMemo(()=>sessions.filter(s=>game==='all'||display(s.game_name)===game),[sessions,game,aliases])
   const byDay     =byGame // sessions are already scoped to the selected day
-  const liveShow  =useMemo(()=>live.filter(p=>game==='all'||display(p.game_name)===game),[live,game,aliases])
+  const liveShow  =useMemo(()=>{
+    const cutoff=Date.now()-STALE_HOURS*3600*1000
+    return live
+      .filter(p=>new Date(p.joined_at).getTime()>cutoff)   // drop ghost sessions
+      .filter(p=>game==='all'||display(p.game_name)===game)
+  },[live,game,aliases,now])
   const playtime  =useMemo(()=>byDay.reduce((a,s)=>a+s.session_time,0),[byDay])
   const players   =useMemo(()=>new Set(byDay.map(s=>s.username)).size,[byDay])
   const hourly    =useMemo(()=>buildHourly(byGame,day),[byGame,day])
