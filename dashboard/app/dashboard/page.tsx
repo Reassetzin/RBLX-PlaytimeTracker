@@ -4,11 +4,11 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { supabase, type Session, type LivePlayer } from '@/lib/supabase'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
-const V='v3.3'
+const V='v3.4'
 const BG='#111111',SURFACE='#1c1c1c',ELEV='#242424',BORDER='#2e2e2e'
 const ACCENT='#60a5fa',GREEN='#4ade80',TEXT='#f0f0f0',TEXT2='#888',TEXT3='#444'
 const TZ='America/New_York' // EST/EDT — all date comparisons use this
-const STALE_HOURS=3 // live entries older than this are treated as ghosts
+const STALE_HOURS=5 // live entries older than this are treated as ghosts
 
 type SortKey = 'when'|'session'|'total'|'player'|'count'
 type SortDir = 'asc'|'desc'
